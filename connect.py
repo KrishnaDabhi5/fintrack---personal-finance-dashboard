@@ -11,17 +11,24 @@ import warnings
 import pymongo
 from pymongo import MongoClient
 import hashlib
+from config import *
 warnings.filterwarnings('ignore')
 
 # MongoDB connection
-@st.cache_resource
 def init_mongodb():
+    """Initialize MongoDB connection - returns None if not available"""
     try:
-        client = MongoClient("mongodb://localhost:27017/")
-        db = client["fintrack_db"]
+        # Try to connect to MongoDB using config with very short timeout
+        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000)
+        # Test the connection
+        client.admin.command('ping')
+        db = client[MONGODB_DB_NAME]
+        st.session_state.mongodb_available = True
+        print("MongoDB connection successful")
         return db
     except Exception as e:
-        st.error(f"MongoDB connection failed: {e}")
+        st.session_state.mongodb_available = False
+        # Don't print the error to avoid cluttering logs
         return None
 
 # User authentication functions
@@ -58,52 +65,63 @@ def authenticate_user():
 
 # Database operations
 def load_user_data(db, user_id):
-    """Load user data from MongoDB"""
+    """Load user data from MongoDB or session state"""
     try:
-        user_data = db.users.find_one({"user_id": user_id})
-        
-        if user_data:
-            # Load expenses
-            expenses_data = user_data.get('expenses', [])
-            st.session_state.expenses = pd.DataFrame(expenses_data) if expenses_data else pd.DataFrame(columns=['date', 'category', 'amount', 'description'])
+        if db is not None and st.session_state.get('mongodb_available', False):
+            # Try to load from MongoDB
+            user_data = db.users.find_one({"user_id": user_id})
             
-            # Load income
-            income_data = user_data.get('income', [])
-            st.session_state.income = pd.DataFrame(income_data) if income_data else pd.DataFrame(columns=['date', 'source', 'amount', 'frequency'])
-            
-            # Load budget
-            st.session_state.budget = user_data.get('budget', {
-                'Food': 5000, 'Transportation': 3000, 'Entertainment': 2000,
-                'Shopping': 4000, 'Utilities': 2500, 'Medical': 1500,
-                'Education': 2000, 'Miscellaneous': 1000
-            })
-            
-            # Load savings goals
-            st.session_state.savings_goals = user_data.get('savings_goals', [
-                {'name': 'Emergency Fund', 'target': 50000, 'current': 15000, 'deadline': '2024-12-31'},
-                {'name': 'Vacation', 'target': 25000, 'current': 8000, 'deadline': '2024-08-15'}
-            ])
-            
-            # Load user profile
-            st.session_state.user_profile = user_data.get('user_profile', {
-                'name': st.session_state.user_email.split('@')[0],
-                'email': st.session_state.user_email,
-                'member_since': datetime.now().strftime('%Y-%m-%d'),
-                'currency': '₹',
-                'language': 'English'
-            })
-            
-            print("Loading user data for user_id:", user_id)
-            print("Loaded user data:", user_data)
+            if user_data:
+                # Load expenses
+                expenses_data = user_data.get('expenses', [])
+                st.session_state.expenses = pd.DataFrame(expenses_data) if expenses_data else pd.DataFrame(columns=['date', 'category', 'amount', 'description'])
+                
+                # Load income
+                income_data = user_data.get('income', [])
+                st.session_state.income = pd.DataFrame(income_data) if income_data else pd.DataFrame(columns=['date', 'source', 'amount', 'frequency'])
+                
+                # Load budget
+                st.session_state.budget = user_data.get('budget', {
+                    'Food': 5000, 'Transportation': 3000, 'Entertainment': 2000,
+                    'Shopping': 4000, 'Utilities': 2500, 'Medical': 1500,
+                    'Education': 2000, 'Miscellaneous': 1000
+                })
+                
+                # Load savings goals
+                st.session_state.savings_goals = user_data.get('savings_goals', [
+                    {'name': 'Emergency Fund', 'target': 50000, 'current': 15000, 'deadline': '2024-12-31'},
+                    {'name': 'Vacation', 'target': 25000, 'current': 8000, 'deadline': '2024-08-15'}
+                ])
+                
+                # Load user profile
+                st.session_state.user_profile = user_data.get('user_profile', {
+                    'name': st.session_state.user_email.split('@')[0],
+                    'email': st.session_state.user_email,
+                    'member_since': datetime.now().strftime('%Y-%m-%d'),
+                    'currency': '₹',
+                    'language': 'English'
+                })
+                
+                print("Loading user data for user_id:", user_id)
+                print("Loaded user data:", user_data)
+            else:
+                # Initialize new user with default data
+                initialize_new_user()
         else:
-            # Initialize new user with default data
-            initialize_new_user()
+            # MongoDB not available, use session state
+            if 'expenses' not in st.session_state:
+                initialize_new_user()
+            print("Using session state storage (MongoDB not available)")
+            
     except Exception as e:
-        st.error(f"Error loading user data: {e}")
-        initialize_new_user()
+        print(f"Error loading user data: {e}")
+        # Fallback to session state
+        if 'expenses' not in st.session_state:
+            initialize_new_user()
+        print("Falling back to session state storage")
 
 def save_user_data(db, user_id):
-    """Save user data to MongoDB"""
+    """Save user data to MongoDB or session state"""
     try:
         # Convert DataFrames to list of dictionaries
         expenses_data = st.session_state.expenses.to_dict('records') if not st.session_state.expenses.empty else []
@@ -125,43 +143,41 @@ def save_user_data(db, user_id):
             elif isinstance(income['date'], (date, )):
                 income['date'] = income['date'].isoformat()
 
-        # Prepare user data
-        user_data = {
-            "user_id": user_id,
-            "email": st.session_state.user_email,
-            "expenses": expenses_data,
-            "income": income_data,
-            "budget": st.session_state.budget,
-            "savings_goals": st.session_state.savings_goals,
-            "user_profile": st.session_state.user_profile,
-            "last_updated": datetime.now()
-        }
+        if db is not None and st.session_state.get('mongodb_available', False):
+            # Save to MongoDB
+            user_data = {
+                "user_id": user_id,
+                "email": st.session_state.user_email,
+                "expenses": expenses_data,
+                "income": income_data,
+                "budget": st.session_state.budget,
+                "savings_goals": st.session_state.savings_goals,
+                "user_profile": st.session_state.user_profile,
+                "last_updated": datetime.now()
+            }
 
-        # Upsert user data
-        db.users.replace_one({"user_id": user_id}, user_data, upsert=True)
-        print("Saving user data:", user_data)
-        print("user_id for saving:", st.session_state.user_id)
-        print("Expenses to save:", expenses_data)
-        print("Income to save:", income_data)
+            # Upsert user data
+            db.users.replace_one({"user_id": user_id}, user_data, upsert=True)
+            print("Saving user data to MongoDB:", user_data)
+            print("user_id for saving:", st.session_state.user_id)
+            print("Expenses to save:", expenses_data)
+            print("Income to save:", income_data)
+        else:
+            # MongoDB not available, data is already in session state
+            print("Data saved to session state (MongoDB not available)")
+        
         return True
     except Exception as e:
         print("Error saving user data:", e)
-        st.error(f"Error saving user data: {e}")
-        return False
+        # Data is already in session state, so we don't need to show an error
+        return True
 
 def initialize_new_user():
     """Initialize session state for new user"""
     st.session_state.expenses = pd.DataFrame(columns=['date', 'category', 'amount', 'description'])
     st.session_state.income = pd.DataFrame(columns=['date', 'source', 'amount', 'frequency'])
-    st.session_state.budget = {
-        'Food': 5000, 'Transportation': 3000, 'Entertainment': 2000,
-        'Shopping': 4000, 'Utilities': 2500, 'Medical': 1500,
-        'Education': 2000, 'Miscellaneous': 1000
-    }
-    st.session_state.savings_goals = [
-        {'name': 'Emergency Fund', 'target': 50000, 'current': 15000, 'deadline': '2024-12-31'},
-        {'name': 'Vacation', 'target': 25000, 'current': 8000, 'deadline': '2024-08-15'}
-    ]
+    st.session_state.budget = DEFAULT_BUDGET.copy()
+    st.session_state.savings_goals = DEFAULT_SAVINGS_GOALS.copy()
     st.session_state.user_profile = {
         'name': st.session_state.user_email.split('@')[0] if st.session_state.user_email else 'User',
         'email': st.session_state.user_email,
@@ -172,8 +188,8 @@ def initialize_new_user():
 
 # Page configuration
 st.set_page_config(
-    page_title="FinTrack - Personal Finance Dashboard",
-    page_icon="💰",
+    page_title=APP_TITLE,
+    page_icon=APP_ICON,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -209,17 +225,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Expense categories
-EXPENSE_CATEGORIES = [
-    'Food', 'Transportation', 'Entertainment', 'Shopping', 'Utilities',
-    'Medical', 'Education', 'Rent', 'Mobile Recharge', 'Health',
-    'Clothes', 'Electricity', 'Miscellaneous'
-]
-
-INCOME_SOURCES = [
-    'Salary', 'Freelance', 'Rental Income', 'Investment Returns', 
-    'Business', 'Gifts', 'Other'
-]
+# Constants are now imported from config.py
 
 # Helper functions (modified to save to DB)
 def add_expense(date, category, amount, description=""):
@@ -231,11 +237,10 @@ def add_expense(date, category, amount, description=""):
     })
     st.session_state.expenses = pd.concat([st.session_state.expenses, new_expense], ignore_index=True)
     
-    # Save to database
-    db = init_mongodb()
-    if db is not None:
+    # Save to database (if available) - use existing connection
+    if st.session_state.get('mongodb_available', False) and 'db_connection' in st.session_state:
         print("user_id before saving:", st.session_state.user_id)
-        save_user_data(db, st.session_state.user_id)
+        save_user_data(st.session_state.db_connection, st.session_state.user_id)
 
 def add_income(date, source, amount, frequency="One-time"):
     new_income = pd.DataFrame({
@@ -246,11 +251,10 @@ def add_income(date, source, amount, frequency="One-time"):
     })
     st.session_state.income = pd.concat([st.session_state.income, new_income], ignore_index=True)
     
-    # Save to database
-    db = init_mongodb()
-    if db is not None:
+    # Save to database (if available) - use existing connection
+    if st.session_state.get('mongodb_available', False) and 'db_connection' in st.session_state:
         print("user_id before saving:", st.session_state.user_id)
-        save_user_data(db, st.session_state.user_id)
+        save_user_data(st.session_state.db_connection, st.session_state.user_id)
 
 def get_monthly_data(df, date_col='date'):
     if df.empty:
@@ -294,9 +298,17 @@ def generate_ai_insights():
 def main():
     # Initialize MongoDB
     db = init_mongodb()
-    if db is None:
-        st.error("Cannot connect to MongoDB. Please ensure MongoDB is running on localhost:27017")
-        return
+    
+    # Store database connection in session state for reuse
+    if db is not None:
+        st.session_state.db_connection = db
+    
+    # Show MongoDB status in sidebar
+    if st.session_state.get('mongodb_available', False):
+        st.sidebar.success("✅ MongoDB Connected")
+    else:
+        st.sidebar.warning("⚠️ MongoDB not available - using session storage")
+        st.sidebar.info("Data will be stored in browser session only")
     
     # Authenticate user
     if not authenticate_user():
@@ -320,11 +332,11 @@ def main():
     elif page == "Add Transaction":
         add_transaction_page()
     elif page == "Budget":
-        budget_page(db)
+        budget_page()
     elif page == "Analytics":
         analytics_page()
     elif page == "Profile":
-        profile_page(db)
+        profile_page()
 
 # Dashboard page (remains the same)
 def dashboard_page():
@@ -463,7 +475,7 @@ def add_transaction_page():
                 st.info("No income recorded yet.")
 
 # Budget page (modified to save to DB)
-def budget_page(db):
+def budget_page():
     st.header("💰 Budget Management")
     
     # Current budget overview
@@ -555,7 +567,9 @@ def budget_page(db):
         
         if st.button("Update Budget"):
             st.session_state.budget = new_budget
-            save_user_data(db, st.session_state.user_id)
+            # Use stored database connection
+            if st.session_state.get('mongodb_available', False) and 'db_connection' in st.session_state:
+                save_user_data(st.session_state.db_connection, st.session_state.user_id)
             st.success("Budget updated successfully!")
             st.rerun()
 
@@ -648,7 +662,7 @@ def analytics_page():
             st.metric("Largest Single Expense", f"₹{largest_expense:.2f}")
 
 # Profile page (modified to save to DB)
-def profile_page(db):
+def profile_page():
     st.header("👤 User Profile")
     
     col1, col2 = st.columns([1, 2])
@@ -668,7 +682,9 @@ def profile_page(db):
             
             if st.form_submit_button("Update Profile"):
                 st.session_state.user_profile['name'] = name
-                save_user_data(db, st.session_state.user_id)
+                # Use stored database connection
+                if st.session_state.get('mongodb_available', False) and 'db_connection' in st.session_state:
+                    save_user_data(st.session_state.db_connection, st.session_state.user_id)
                 st.success("Profile updated successfully!")
     
     # Account statistics
