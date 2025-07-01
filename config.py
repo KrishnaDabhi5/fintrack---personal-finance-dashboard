@@ -1,8 +1,9 @@
 import os
 
 # MongoDB Configuration
-MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-MONGODB_DB_NAME = os.getenv('MONGODB_DB_NAME', 'fintrack_db')
+# Using the working MongoDB Atlas connection string
+MONGODB_URI = 'mongodb+srv://krishnadabhi:krishnadabhi159@cluster0.kb8oner.mongodb.net/fintrack_db?retryWrites=true&w=majority&appName=Cluster0'
+MONGODB_DB_NAME = 'fintrack_db'
 
 # App Configuration
 APP_TITLE = "FinTrack - Personal Finance Dashboard"

@@ -12,6 +12,7 @@ import pymongo
 from pymongo import MongoClient
 import hashlib
 from config import *
+import os
 warnings.filterwarnings('ignore')
 
 # MongoDB connection
@@ -260,9 +261,8 @@ def get_monthly_data(df, date_col='date'):
     if df.empty:
         return 0
     df[date_col] = pd.to_datetime(df[date_col])
-    current_month = datetime.now().replace(day=1)
-    monthly_data = df[df[date_col] >= current_month]
-    return monthly_data['amount'].sum()
+    # Show all data, no date filtering
+    return df['amount'].sum()
 
 def generate_ai_insights():
     insights = []
@@ -414,7 +414,7 @@ def dashboard_page():
             days_until_salary = (next_salary - today).days
         st.metric("Days Until Next Salary", days_until_salary)
 
-# Add transaction page (remains mostly the same)
+# Add transaction page (modified to include delete buttons)
 def add_transaction_page():
     st.header("💳 Add Transaction")
     
@@ -461,16 +461,36 @@ def add_transaction_page():
         with col1:
             st.write("**Recent Expenses**")
             if not st.session_state.expenses.empty:
-                recent_expenses = st.session_state.expenses.tail(5)
-                st.dataframe(recent_expenses, use_container_width=True)
+                recent_expenses = st.session_state.expenses.tail(5).copy()
+                if 'date' in recent_expenses.columns:
+                    recent_expenses['date'] = recent_expenses['date'].astype(str)
+                for idx, row in recent_expenses.iterrows():
+                    st.write(row)
+                    if st.button(f"Delete Expense {idx}", key=f"del_exp_{idx}"):
+                        st.session_state.expenses.drop(idx, inplace=True)
+                        st.session_state.expenses.reset_index(drop=True, inplace=True)
+                        if st.session_state.get('mongodb_available', False) and 'db_connection' in st.session_state:
+                            save_user_data(st.session_state.db_connection, st.session_state.user_id)
+                        st.success("Expense deleted!")
+                        st.rerun()
             else:
                 st.info("No expenses recorded yet.")
         
         with col2:
             st.write("**Recent Income**")
             if not st.session_state.income.empty:
-                recent_income = st.session_state.income.tail(5)
-                st.dataframe(recent_income, use_container_width=True)
+                recent_income = st.session_state.income.tail(5).copy()
+                if 'date' in recent_income.columns:
+                    recent_income['date'] = recent_income['date'].astype(str)
+                for idx, row in recent_income.iterrows():
+                    st.write(row)
+                    if st.button(f"Delete Income {idx}", key=f"del_inc_{idx}"):
+                        st.session_state.income.drop(idx, inplace=True)
+                        st.session_state.income.reset_index(drop=True, inplace=True)
+                        if st.session_state.get('mongodb_available', False) and 'db_connection' in st.session_state:
+                            save_user_data(st.session_state.db_connection, st.session_state.user_id)
+                        st.success("Income deleted!")
+                        st.rerun()
             else:
                 st.info("No income recorded yet.")
 
